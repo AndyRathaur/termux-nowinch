@@ -29,6 +29,40 @@ static struct termios orig_termios;
 static int raw_mode_active = 0;
 static struct winsize pty_ws;
 
+static int get_clamped_rows(int rows) {
+    const char *env = getenv("NOWINCH_ROWS");
+    if (env && *env) {
+        if (strcmp(env, "0") == 0 || strcmp(env, "none") == 0 || strcmp(env, "off") == 0) {
+            return rows > 0 ? rows : 24;
+        }
+        int custom = atoi(env);
+        if (custom > 0) {
+            return (rows > custom) ? custom : (rows > 0 ? rows : custom);
+        }
+    }
+    /*
+     * Default clamped rows: 18.
+     * When the Android soft keyboard is open, Termux's visible area is usually
+     * between 16 and 20 rows.
+     *
+     * If the reported terminal height exceeds the visible screen while the
+     * keyboard is open, interactive TUIs (like agy) that redraw active turns
+     * with ANSI cursor-up will hit the top screen ceiling (row 1). Because
+     * cursor-up cannot cross row 1 into terminal scrollback, the TUI prints
+     * lines again from row 1, appending duplicate message lines into Termux
+     * scrollback on every streaming chunk.
+     *
+     * Clamping the reported rows to match the keyboard-open viewport ensures
+     * cursor-up never hits the top ceiling, eliminating duplicate messages
+     * in scrollback while finger-scrolling.
+     */
+    int max_r = 18;
+    if (rows > max_r) {
+        return max_r;
+    }
+    return rows > 0 ? rows : 18;
+}
+
 static void cleanup_terminal(void) {
     if (raw_mode_active) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
@@ -57,7 +91,10 @@ static void sigwinch_handler(int sig) {
          * process from unnecessarily redrawing and scrolling the entire conversation history!
          */
         if (current_ws.ws_col != pty_ws.ws_col) {
-            pty_ws = current_ws;
+            pty_ws.ws_col = current_ws.ws_col;
+            pty_ws.ws_row = get_clamped_rows(current_ws.ws_row);
+            pty_ws.ws_xpixel = current_ws.ws_xpixel;
+            pty_ws.ws_ypixel = current_ws.ws_ypixel;
             ioctl(master_fd, TIOCSWINSZ, &pty_ws);
         }
     }
@@ -76,19 +113,20 @@ int main(int argc, char *argv[]) {
         }
         if (ioctl(STDIN_FILENO, TIOCGWINSZ, &pty_ws) == -1) {
             pty_ws.ws_col = 80;
-            pty_ws.ws_row = 35;
+            pty_ws.ws_row = 18;
         }
     } else {
         pty_ws.ws_col = 80;
-        pty_ws.ws_row = 35;
+        pty_ws.ws_row = 18;
     }
 
     /*
-     * Ensure adequate minimum rows even if launched while the virtual keyboard
-     * is already active on screen.
+     * Clamp rows to ensure cursor-up redraws never hit the top of the visible
+     * screen when the virtual keyboard is open.
      */
-    if (pty_ws.ws_row < 24) {
-        pty_ws.ws_row = 35;
+    pty_ws.ws_row = get_clamped_rows(pty_ws.ws_row);
+    if (pty_ws.ws_col <= 0) {
+        pty_ws.ws_col = 80;
     }
 
     child_pid = forkpty(&master_fd, NULL, NULL, &pty_ws);

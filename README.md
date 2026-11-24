@@ -23,8 +23,22 @@ While enabling `altScreenMode` stops the scroll lag, it sacrifices native touch-
 `nowinch` acts as a transparent, high-performance PTY proxy between Termux and the target command:
 
 - **Filters Height-Only Resizes**: Opening/closing the software keyboard or switching apps changes only the terminal **rows**, while **columns (width)** remain unchanged. `nowinch` catches `SIGWINCH` and drops row-only changes. The child application (`agy`) never receives `SIGWINCH`, preventing all redraw lag!
+- **Prevents Duplicate Scrollback Messages**: When the virtual keyboard is open, Termux's visible area shrinks to ~16–20 rows. If an inline TUI assumes more rows are available, streaming ANSI cursor-up (`\033[NA`) redraws clamp at row 1 of the visible screen and cannot reach into scrollback history, causing repeated chunks of the same message to spill into scrollback. `nowinch` clamps the reported row height to fit safely inside the keyboard-open screen (default: 18 rows), ensuring in-place updates never hit the screen ceiling and each message appears in scrollback **exactly once**.
 - **Preserves Orientation Changes**: If you rotate your phone between portrait and landscape, the column count changes. `nowinch` forwards the resize so lines re-wrap cleanly.
 - **Maintains 100% Native Scrolling**: Runs in standard terminal inline mode. All output is kept in Termux's native scrollback buffer so you can smoothly swipe up and down with your finger.
+
+---
+
+## Configuration
+
+- `NOWINCH_ROWS`: Customizes the clamped row height reported to child processes (default: `18`).
+  ```bash
+  # In ~/.bashrc or export before running:
+  export NOWINCH_ROWS=20
+
+  # Or disable row clamping entirely:
+  export NOWINCH_ROWS=0
+  ```
 
 ---
 
